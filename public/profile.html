@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeNotes - Profile</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container container-wide">
+    <h1 id="profileTitle">My Profile</h1>
+    
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/notes">My Notes</a>
+      <a href="/notes/create">Create Note</a>
+      <a href="/users">View All Users</a>
+      <a href="/api/auth/logout" onclick="event.preventDefault(); logout();">Logout</a>
+    </div>
+    
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+    <div id="successMessage" class="success-message" style="display: none;"></div>
+    
+    <div id="loadingMessage" style="text-align: center; color: #666; margin: 20px 0;">Loading profile...</div>
+    
+    <form id="profileForm" style="display: none;">
+      <div class="avatar-container">
+        <div id="avatarPreviewContainer">
+          <img id="avatarPreview" class="avatar-preview" style="display: none;" alt="Avatar preview">
+          <div id="avatarPlaceholder" class="avatar-placeholder">👤</div>
+        </div>
+        <label for="avatar">Avatar Image</label>
+        <input type="file" id="avatar" name="avatar" accept="image/*">
+        <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">Max 5MB. Accepted formats: JPG, PNG, GIF, WebP</small>
+      </div>
+      
+      <div class="form-group">
+        <label for="description">Description</label>
+        <textarea id="description" name="description" placeholder="Tell us about yourself..."></textarea>
+      </div>
+      
+      <button type="submit">Update Profile</button>
+    </form>
+    
+    <div id="publicNotesSection" style="margin-top: 40px; padding-top: 40px; border-top: 2px solid #e0e0e0; display: none;">
+      <h2 style="font-size: 22px; color: #333; margin-bottom: 20px;">My Public Notes</h2>
+      <div id="publicNotesList" class="notes-list"></div>
+      <div id="noPublicNotes" class="empty-state" style="display: none;">
+        <div class="empty-state-icon">📝</div>
+        <p>You don't have any public notes yet.</p>
+        <p style="font-size: 12px; color: #999; margin-top: 10px;">Mark notes as public when creating or editing them to make them visible on your profile.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentAvatarPath = null;
+    let viewingUserId = null;
+    let isOwnProfile = true;
+
+    // Check if viewing own profile or another user's profile
+    function getUserIdFromURL() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const userId = urlParams.get('userId');
+      return userId ? parseInt(userId) : null;
+    }
+
+    // Check authentication and load profile
+    async function loadProfile() {
+      try {
+        // Check if authenticated
+        const authResponse = await fetch('/api/auth/me');
+        const authData = await authResponse.json();
+        
+        if (!authData.authenticated) {
+          window.location.href = '/login';
+          return;
+        }
+
+        viewingUserId = getUserIdFromURL();
+        isOwnProfile = !viewingUserId || viewingUserId === authData.user.id;
+
+        // Load profile data
+        let response;
+        if (isOwnProfile) {
+          response = await fetch('/api/profile/me');
+        } else {
+          response = await fetch(`/api/profile/user/${viewingUserId}`);
+        }
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          const user = data.user;
+          
+          // Update page title
+          if (isOwnProfile) {
+            document.getElementById('profileTitle').textContent = 'My Profile';
+          } else {
+            document.getElementById('profileTitle').textContent = `${user.username}'s Profile`;
+          }
+          
+          // Show edit form only for own profile
+          if (isOwnProfile) {
+            document.getElementById('description').value = user.description || '';
+            currentAvatarPath = user.avatar_path;
+            
+            if (user.avatar_path) {
+              document.getElementById('avatarPreview').src = user.avatar_path;
+              document.getElementById('avatarPreview').style.display = 'block';
+              document.getElementById('avatarPlaceholder').style.display = 'none';
+            } else {
+              document.getElementById('avatarPreview').style.display = 'none';
+              document.getElementById('avatarPlaceholder').style.display = 'flex';
+            }
+            
+            document.getElementById('profileForm').style.display = 'block';
+          } else {
+            // Show read-only profile view
+            const profileView = document.createElement('div');
+            profileView.style.cssText = 'background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px;';
+            
+            let avatarHtml = '';
+            if (user.avatar_path) {
+              avatarHtml = `<img src="${user.avatar_path}" alt="${user.username}" class="avatar-preview" style="display: block; margin: 0 auto 15px;">`;
+            } else {
+              avatarHtml = `<div class="avatar-placeholder" style="margin: 0 auto 15px;">👤</div>`;
+            }
+            
+            profileView.innerHTML = `
+              ${avatarHtml}
+              <div style="text-align: center;">
+                <h2 style="color: #333; margin-bottom: 10px;">${escapeHtml(user.username)}</h2>
+                <p style="color: #666;">${user.description ? escapeHtml(user.description) : '<em style="color: #999;">No description</em>'}</p>
+              </div>
+            `;
+            
+            document.getElementById('profileForm').parentNode.insertBefore(profileView, document.getElementById('profileForm'));
+            document.getElementById('profileForm').style.display = 'none';
+          }
+          
+          document.getElementById('loadingMessage').style.display = 'none';
+          
+          // Load public notes
+          loadPublicNotes(user.id, isOwnProfile);
+        } else {
+          showError(data.error || 'Failed to load profile');
+        }
+      } catch (error) {
+        console.error('Error loading profile:', error);
+        showError('An error occurred while loading the profile');
+      }
+    }
+
+    async function loadPublicNotes(userId, isOwn) {
+      try {
+        const response = await fetch(`/api/notes/user/${userId}/public`);
+        const data = await response.json();
+        
+        if (response.ok) {
+          const publicNotesSection = document.getElementById('publicNotesSection');
+          const publicNotesList = document.getElementById('publicNotesList');
+          const noPublicNotes = document.getElementById('noPublicNotes');
+          
+          publicNotesSection.style.display = 'block';
+          
+          // Update section title
+          const sectionTitle = publicNotesSection.querySelector('h2');
+          if (isOwn) {
+            sectionTitle.textContent = 'My Public Notes';
+          } else {
+            sectionTitle.textContent = 'Public Notes';
+          }
+          
+          if (data.notes.length === 0) {
+            publicNotesList.style.display = 'none';
+            noPublicNotes.style.display = 'block';
+            if (!isOwn) {
+              noPublicNotes.innerHTML = `
+                <div class="empty-state-icon">📝</div>
+                <p>This user doesn't have any public notes yet.</p>
+              `;
+            }
+          } else {
+            publicNotesList.innerHTML = '';
+            noPublicNotes.style.display = 'none';
+            
+            data.notes.forEach(note => {
+              const noteCard = document.createElement('a');
+              noteCard.href = `/notes/${note.id}`;
+              noteCard.className = 'note-card';
+              
+              const createdDate = new Date(note.created_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+              
+              const updatedDate = new Date(note.updated_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+              
+              const dateText = note.created_at === note.updated_at 
+                ? `Created: ${createdDate}`
+                : `Updated: ${updatedDate}`;
+              
+              noteCard.innerHTML = `
+                <div class="note-card-title">${escapeHtml(note.title)} <span style="font-size: 12px; color: #667eea; font-weight: normal;">(Public)</span></div>
+                <div class="note-card-preview">${escapeHtml(note.content)}</div>
+                <div class="note-card-date">${dateText}</div>
+              `;
+              
+              publicNotesList.appendChild(noteCard);
+            });
+            
+            publicNotesList.style.display = 'block';
+          }
+        }
+      } catch (error) {
+        console.error('Error loading public notes:', error);
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Handle avatar preview
+    document.getElementById('avatar').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          document.getElementById('avatarPreview').src = e.target.result;
+          document.getElementById('avatarPreview').style.display = 'block';
+          document.getElementById('avatarPlaceholder').style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    // Handle form submission
+    document.getElementById('profileForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const errorDiv = document.getElementById('errorMessage');
+      const successDiv = document.getElementById('successMessage');
+      errorDiv.style.display = 'none';
+      successDiv.style.display = 'none';
+      
+      const formData = new FormData();
+      const description = document.getElementById('description').value;
+      const avatarFile = document.getElementById('avatar').files[0];
+      
+      formData.append('description', description);
+      if (avatarFile) {
+        formData.append('avatar', avatarFile);
+      }
+      
+      try {
+        const response = await fetch('/api/profile/me', {
+          method: 'PUT',
+          body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          successDiv.textContent = data.message;
+          successDiv.style.display = 'block';
+          
+          // Update avatar preview if new avatar was uploaded
+          if (data.user.avatar_path) {
+            currentAvatarPath = data.user.avatar_path;
+            document.getElementById('avatarPreview').src = data.user.avatar_path;
+            document.getElementById('avatarPreview').style.display = 'block';
+            document.getElementById('avatarPlaceholder').style.display = 'none';
+          }
+          
+          // Clear file input
+          document.getElementById('avatar').value = '';
+          
+          setTimeout(() => {
+            successDiv.style.display = 'none';
+          }, 3000);
+        } else {
+          errorDiv.textContent = data.error || 'Failed to update profile';
+          errorDiv.style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Error updating profile:', error);
+        errorDiv.textContent = 'An error occurred. Please try again.';
+        errorDiv.style.display = 'block';
+      }
+    });
+
+    async function logout() {
+      try {
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          window.location.href = '/';
+        }
+      } catch (error) {
+        console.error('Error logging out:', error);
+      }
+    }
+
+    function showError(message) {
+      const errorDiv = document.getElementById('errorMessage');
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+      document.getElementById('loadingMessage').style.display = 'none';
+    }
+
+    loadProfile();
+  </script>
+</body>
+</html>
+

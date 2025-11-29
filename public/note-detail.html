@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeNotes - Note Detail</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container container-wide">
+    <h1>Note Detail</h1>
+    
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/notes">My Notes</a>
+      <a href="/notes/create">Create New Note</a>
+      <a href="/profile">My Profile</a>
+      <a href="/users">View All Users</a>
+      <a href="/api/auth/logout" onclick="event.preventDefault(); logout();">Logout</a>
+    </div>
+    
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+    <div id="loadingMessage" style="text-align: center; color: #666; margin: 20px 0;">Loading note...</div>
+    
+    <div id="noteDetail" class="note-detail" style="display: none;">
+      <div class="note-detail-title" id="noteTitle"></div>
+      <div class="note-detail-content" id="noteContent"></div>
+      <div class="note-detail-meta" id="noteMeta"></div>
+      
+      <div id="attachmentsSection" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0; display: none;">
+        <h3 style="font-size: 18px; color: #333; margin-bottom: 15px;">Attachments</h3>
+        <div id="attachmentsList"></div>
+      </div>
+      
+      <div style="margin-top: 20px; display: flex; gap: 10px;">
+        <a href="#" id="editLink" style="text-decoration: none; flex: 1;">
+          <button>Edit Note</button>
+        </a>
+        <button id="deleteBtn" class="logout-btn" style="flex: 1;">Delete Note</button>
+      </div>
+    </div>
+    
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 1000; justify-content: center; align-items: center;">
+      <div style="background: white; padding: 30px; border-radius: 12px; max-width: 400px; width: 90%;">
+        <h2 style="margin-bottom: 15px; color: #333;">Delete Note?</h2>
+        <p style="margin-bottom: 20px; color: #666;">Are you sure you want to delete this note? This action cannot be undone.</p>
+        <div style="display: flex; gap: 10px;">
+          <button id="confirmDeleteBtn" class="logout-btn" style="flex: 1;">Delete</button>
+          <button id="cancelDeleteBtn" class="secondary" style="flex: 1;">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentNoteId = null;
+
+    async function loadNote() {
+      try {
+        // Check if authenticated
+        const authResponse = await fetch('/api/auth/me');
+        const authData = await authResponse.json();
+        
+        if (!authData.authenticated) {
+          window.location.href = '/login';
+          return;
+        }
+
+        // Get note ID from URL
+        const pathParts = window.location.pathname.split('/');
+        currentNoteId = pathParts[pathParts.length - 1];
+        
+        if (!currentNoteId || isNaN(currentNoteId)) {
+          showError('Invalid note ID');
+          return;
+        }
+
+        // Load note
+        const response = await fetch(`/api/notes/${currentNoteId}`);
+        const data = await response.json();
+        
+        if (response.ok) {
+          const note = data.note;
+          const attachments = data.attachments || [];
+          const isOwner = data.is_owner;
+          const loadingMessage = document.getElementById('loadingMessage');
+          const noteDetail = document.getElementById('noteDetail');
+          
+          document.getElementById('noteTitle').textContent = note.title;
+          document.getElementById('noteContent').textContent = note.content;
+          
+          // Show edit/delete buttons only if user is the owner
+          const actionButtons = document.querySelector('#noteDetail > div:last-child');
+          if (isOwner) {
+            document.getElementById('editLink').href = `/notes/${currentNoteId}/edit`;
+            actionButtons.style.display = 'flex';
+          } else {
+            actionButtons.style.display = 'none';
+            // Show a message that this is a public note
+            const publicNoteMsg = document.createElement('div');
+            publicNoteMsg.style.cssText = 'background: #e3f2fd; padding: 15px; border-radius: 8px; margin-top: 20px; color: #1976d2;';
+            publicNoteMsg.textContent = '📖 This is a public note. You can read it but cannot edit or delete it.';
+            noteDetail.insertBefore(publicNoteMsg, actionButtons);
+          }
+          
+          const createdDate = new Date(note.created_at).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          const updatedDate = new Date(note.updated_at).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          let metaText = `Created: ${createdDate}`;
+          if (note.created_at !== note.updated_at) {
+            metaText += ` • Updated: ${updatedDate}`;
+          }
+          if (note.is_public) {
+            metaText += ` • Public`;
+          }
+          
+          document.getElementById('noteMeta').textContent = metaText;
+          
+          // Display attachments (only owner can delete)
+          displayAttachments(attachments, isOwner);
+          
+          // Update page title
+          document.title = `${note.title} - VibeNotes`;
+          
+          loadingMessage.style.display = 'none';
+          noteDetail.style.display = 'block';
+        } else {
+          showError(data.error || 'Failed to load note');
+        }
+      } catch (error) {
+        console.error('Error loading note:', error);
+        showError('An error occurred while loading the note');
+      }
+    }
+
+    // Delete note functionality
+    document.getElementById('deleteBtn').addEventListener('click', () => {
+      document.getElementById('deleteModal').style.display = 'flex';
+    });
+
+    document.getElementById('cancelDeleteBtn').addEventListener('click', () => {
+      document.getElementById('deleteModal').style.display = 'none';
+    });
+
+    document.getElementById('confirmDeleteBtn').addEventListener('click', async () => {
+      try {
+        const response = await fetch(`/api/notes/${currentNoteId}`, {
+          method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          // Redirect to notes list after successful deletion
+          window.location.href = '/notes';
+        } else {
+          alert(data.error || 'Failed to delete note');
+          document.getElementById('deleteModal').style.display = 'none';
+        }
+      } catch (error) {
+        console.error('Error deleting note:', error);
+        alert('An error occurred while deleting the note');
+        document.getElementById('deleteModal').style.display = 'none';
+      }
+    });
+
+    async function logout() {
+      try {
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          window.location.href = '/';
+        }
+      } catch (error) {
+        console.error('Error logging out:', error);
+      }
+    }
+
+    function displayAttachments(attachments, isOwner) {
+      const attachmentsSection = document.getElementById('attachmentsSection');
+      const attachmentsList = document.getElementById('attachmentsList');
+      
+      if (attachments.length === 0) {
+        attachmentsSection.style.display = 'none';
+        return;
+      }
+      
+      attachmentsSection.style.display = 'block';
+      attachmentsList.innerHTML = '';
+      
+      attachments.forEach(attachment => {
+        const fileSize = (attachment.file_size / 1024 / 1024).toFixed(2);
+        const attachmentDiv = document.createElement('div');
+        attachmentDiv.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: 10px; background: #f5f5f5; border-radius: 6px; margin-bottom: 10px;';
+        
+        let deleteButton = '';
+        if (isOwner) {
+          deleteButton = `<button onclick="deleteAttachment(${attachment.id})" style="padding: 6px 12px; font-size: 14px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer;">Delete</button>`;
+        }
+        
+        attachmentDiv.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+            <span style="font-size: 20px;">📎</span>
+            <div>
+              <div style="font-weight: 500; color: #333;">${escapeHtml(attachment.original_filename)}</div>
+              <div style="font-size: 12px; color: #666;">${fileSize} MB</div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 5px;">
+            <a href="${attachment.file_path}" download="${attachment.original_filename}" style="text-decoration: none;">
+              <button style="padding: 6px 12px; font-size: 14px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer;">Download</button>
+            </a>
+            ${deleteButton}
+          </div>
+        `;
+        
+        attachmentsList.appendChild(attachmentDiv);
+      });
+    }
+
+    async function deleteAttachment(attachmentId) {
+      if (!confirm('Are you sure you want to delete this attachment?')) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/api/notes/${currentNoteId}/attachments/${attachmentId}`, {
+          method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          // Reload note to refresh attachments list
+          loadNote();
+        } else {
+          alert(data.error || 'Failed to delete attachment');
+        }
+      } catch (error) {
+        console.error('Error deleting attachment:', error);
+        alert('An error occurred while deleting the attachment');
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function showError(message) {
+      const errorDiv = document.getElementById('errorMessage');
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+      document.getElementById('loadingMessage').style.display = 'none';
+    }
+
+    loadNote();
+  </script>
+</body>
+</html>
+

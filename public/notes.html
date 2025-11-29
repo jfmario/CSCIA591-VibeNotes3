@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeNotes - My Notes</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container container-wide">
+    <h1>My Notes</h1>
+    
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/notes/create">Create New Note</a>
+      <a href="/profile">My Profile</a>
+      <a href="/users">View All Users</a>
+      <a href="/api/auth/logout" onclick="event.preventDefault(); logout();">Logout</a>
+    </div>
+    
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+    <div id="loadingMessage" style="text-align: center; color: #666; margin: 20px 0;">Loading notes...</div>
+    
+    <div id="notesContainer" style="display: none;">
+      <div id="notesList" class="notes-list"></div>
+    </div>
+    
+    <div id="emptyState" class="empty-state" style="display: none;">
+      <div class="empty-state-icon">📝</div>
+      <h2>No notes yet</h2>
+      <p>Create your first note to get started!</p>
+      <a href="/notes/create" style="text-decoration: none; margin-top: 20px; display: inline-block;">
+        <button>Create Your First Note</button>
+      </a>
+    </div>
+  </div>
+
+  <script>
+    async function loadNotes() {
+      try {
+        // Check if authenticated
+        const authResponse = await fetch('/api/auth/me');
+        const authData = await authResponse.json();
+        
+        if (!authData.authenticated) {
+          window.location.href = '/login';
+          return;
+        }
+
+        // Load notes
+        const response = await fetch('/api/notes');
+        const data = await response.json();
+        
+        if (response.ok) {
+          const loadingMessage = document.getElementById('loadingMessage');
+          const notesContainer = document.getElementById('notesContainer');
+          const notesList = document.getElementById('notesList');
+          const emptyState = document.getElementById('emptyState');
+          
+          loadingMessage.style.display = 'none';
+          
+          if (data.notes.length === 0) {
+            notesContainer.style.display = 'none';
+            emptyState.style.display = 'block';
+          } else {
+            notesList.innerHTML = '';
+            
+            data.notes.forEach(note => {
+              const noteCard = document.createElement('a');
+              noteCard.href = `/notes/${note.id}`;
+              noteCard.className = 'note-card';
+              
+              const createdDate = new Date(note.created_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+              
+              const updatedDate = new Date(note.updated_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+              
+              const dateText = note.created_at === note.updated_at 
+                ? `Created: ${createdDate}`
+                : `Updated: ${updatedDate}`;
+              
+              noteCard.innerHTML = `
+                <div class="note-card-title">${escapeHtml(note.title)}</div>
+                <div class="note-card-preview">${escapeHtml(note.content)}</div>
+                <div class="note-card-date">${dateText}</div>
+              `;
+              
+              notesList.appendChild(noteCard);
+            });
+            
+            notesContainer.style.display = 'block';
+            emptyState.style.display = 'none';
+          }
+        } else {
+          showError(data.error || 'Failed to load notes');
+        }
+      } catch (error) {
+        console.error('Error loading notes:', error);
+        showError('An error occurred while loading notes');
+      }
+    }
+
+    async function logout() {
+      try {
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          window.location.href = '/';
+        }
+      } catch (error) {
+        console.error('Error logging out:', error);
+      }
+    }
+
+    function showError(message) {
+      const errorDiv = document.getElementById('errorMessage');
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+      document.getElementById('loadingMessage').style.display = 'none';
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    loadNotes();
+  </script>
+</body>
+</html>
+

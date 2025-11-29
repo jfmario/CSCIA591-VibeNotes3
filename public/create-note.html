@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeNotes - Create Note</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container container-wide">
+    <h1>Create New Note</h1>
+    
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/notes">My Notes</a>
+      <a href="/profile">My Profile</a>
+      <a href="/users">View All Users</a>
+      <a href="/api/auth/logout" onclick="event.preventDefault(); logout();">Logout</a>
+    </div>
+    
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+    <div id="successMessage" class="success-message" style="display: none;"></div>
+    
+    <form id="createNoteForm">
+      <div class="form-group">
+        <label for="title">Title</label>
+        <input type="text" id="title" name="title" required placeholder="Enter note title...">
+      </div>
+      
+      <div class="form-group">
+        <label for="content">Content</label>
+        <textarea id="content" name="content" required placeholder="Write your note here..." rows="15"></textarea>
+      </div>
+      
+      <div class="form-group">
+        <label for="attachments">Attachments (optional)</label>
+        <input type="file" id="attachments" name="attachments" multiple>
+        <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">You can select multiple files. Max 50MB per file.</small>
+        <div id="fileList" style="margin-top: 10px;"></div>
+      </div>
+      
+      <div class="form-group">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" id="is_public" name="is_public" style="width: auto; cursor: pointer;">
+          <span>Make this note public (visible on your profile)</span>
+        </label>
+      </div>
+      
+      <button type="submit">Create Note</button>
+      <a href="/notes" style="text-decoration: none;">
+        <button type="button" class="secondary">Cancel</button>
+      </a>
+    </form>
+  </div>
+
+  <script>
+    // Check authentication
+    async function checkAuth() {
+      try {
+        const response = await fetch('/api/auth/me');
+        const data = await response.json();
+        
+        if (!data.authenticated) {
+          window.location.href = '/login';
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking auth:', error);
+        window.location.href = '/login';
+      }
+    }
+
+    // Display selected files
+    document.getElementById('attachments').addEventListener('change', function(e) {
+      const fileList = document.getElementById('fileList');
+      const files = e.target.files;
+      
+      if (files.length > 0) {
+        let html = '<div style="font-size: 12px; color: #666;">Selected files:</div>';
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const fileSize = (file.size / 1024 / 1024).toFixed(2);
+          html += `<div style="font-size: 12px; color: #333; margin-top: 5px;">📎 ${file.name} (${fileSize} MB)</div>`;
+        }
+        fileList.innerHTML = html;
+      } else {
+        fileList.innerHTML = '';
+      }
+    });
+
+    // Handle form submission
+    document.getElementById('createNoteForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const errorDiv = document.getElementById('errorMessage');
+      const successDiv = document.getElementById('successMessage');
+      errorDiv.style.display = 'none';
+      successDiv.style.display = 'none';
+      
+      const title = document.getElementById('title').value.trim();
+      const content = document.getElementById('content').value.trim();
+      const attachments = document.getElementById('attachments').files;
+      const isPublic = document.getElementById('is_public').checked;
+      
+      // Validate file sizes
+      for (let i = 0; i < attachments.length; i++) {
+        if (attachments[i].size > 50 * 1024 * 1024) {
+          errorDiv.textContent = `File "${attachments[i].name}" exceeds 50MB limit`;
+          errorDiv.style.display = 'block';
+          return;
+        }
+      }
+      
+      try {
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('content', content);
+        formData.append('is_public', isPublic);
+        
+        for (let i = 0; i < attachments.length; i++) {
+          formData.append('attachments', attachments[i]);
+        }
+        
+        const response = await fetch('/api/notes', {
+          method: 'POST',
+          body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          successDiv.textContent = data.message;
+          successDiv.style.display = 'block';
+          
+          // Redirect to note detail page after a short delay
+          setTimeout(() => {
+            window.location.href = `/notes/${data.note.id}`;
+          }, 1000);
+        } else {
+          errorDiv.textContent = data.error || 'Failed to create note';
+          errorDiv.style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Error creating note:', error);
+        errorDiv.textContent = 'An error occurred. Please try again.';
+        errorDiv.style.display = 'block';
+      }
+    });
+
+    async function logout() {
+      try {
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          window.location.href = '/';
+        }
+      } catch (error) {
+        console.error('Error logging out:', error);
+      }
+    }
+
+    checkAuth();
+  </script>
+</body>
+</html>
+

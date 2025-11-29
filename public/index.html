@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeNotes - Home</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>VibeNotes</h1>
+    <p class="subtitle">Welcome to your notes application</p>
+    
+    <div id="userInfo" style="display: none;">
+      <div class="user-info">
+        <p><strong>Logged in as:</strong> <span id="username"></span></p>
+      </div>
+      <div class="nav-links" style="margin-top: 20px;">
+        <a href="/notes">My Notes</a>
+        <a href="/notes/create">Create Note</a>
+        <a href="/profile">My Profile</a>
+        <a href="/users">View All Users</a>
+      </div>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+    
+    <div id="authLinks">
+      <a href="/login" style="display: block; text-align: center; margin-bottom: 15px;">
+        <button>Login</button>
+      </a>
+      <a href="/register" style="display: block; text-align: center;">
+        <button style="background: #28a745;">Register</button>
+      </a>
+    </div>
+  </div>
+
+  <script>
+    // Check if user is logged in
+    async function checkAuth() {
+      try {
+        const response = await fetch('/api/auth/me');
+        const data = await response.json();
+        
+        if (data.authenticated) {
+          document.getElementById('username').textContent = data.user.username;
+          document.getElementById('userInfo').style.display = 'block';
+          document.getElementById('authLinks').style.display = 'none';
+        } else {
+          document.getElementById('userInfo').style.display = 'none';
+          document.getElementById('authLinks').style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Error checking auth:', error);
+      }
+    }
+
+    async function logout() {
+      try {
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          window.location.reload();
+        }
+      } catch (error) {
+        console.error('Error logging out:', error);
+      }
+    }
+
+    checkAuth();
+  </script>
+</body>
+</html>
+
