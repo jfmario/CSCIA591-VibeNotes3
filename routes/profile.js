@@ -95,10 +95,17 @@ router.put('/me', requireAuth, upload.single('avatar'), async (req, res) => {
 
     // If new avatar uploaded, delete old one and update path
     if (req.file) {
-      // Delete old avatar if it exists
+      // Delete old avatar if it exists (with path traversal protection)
       if (avatarPath) {
-        const oldAvatarPath = path.join(__dirname, '..', 'public', avatarPath);
-        if (fs.existsSync(oldAvatarPath)) {
+        const sanitizedPath = path.normalize(avatarPath).replace(/^(\.\.(\/|\\|$))+/, '');
+        const oldAvatarPath = path.join(__dirname, '..', 'public', sanitizedPath);
+        
+        // Ensure the file path is within the public directory
+        const publicDir = path.join(__dirname, '..', 'public');
+        const resolvedPath = path.resolve(oldAvatarPath);
+        const resolvedPublicDir = path.resolve(publicDir);
+        
+        if (resolvedPath.startsWith(resolvedPublicDir) && fs.existsSync(oldAvatarPath)) {
           fs.unlinkSync(oldAvatarPath);
         }
       }
@@ -106,18 +113,30 @@ router.put('/me', requireAuth, upload.single('avatar'), async (req, res) => {
       avatarPath = `/uploads/${req.file.filename}`;
     }
 
+    // Validate and sanitize description
+    if (description !== undefined && description !== null) {
+      if (typeof description !== 'string') {
+        return res.status(400).json({ error: 'Description must be a string' });
+      }
+      // Limit description length (e.g., 1000 characters)
+      if (description.length > 1000) {
+        return res.status(400).json({ error: 'Description must be 1000 characters or less' });
+      }
+    }
+
     // Update user profile
     const updateFields = [];
     const updateValues = [];
     let paramCount = 1;
 
-    if (description !== undefined) {
+    // Only allow specific fields to be updated (whitelist approach)
+    if (description !== undefined && description !== null) {
       updateFields.push(`description = $${paramCount}`);
-      updateValues.push(description);
+      updateValues.push(description.trim());
       paramCount++;
     }
 
-    if (avatarPath !== undefined) {
+    if (avatarPath !== undefined && avatarPath !== null) {
       updateFields.push(`avatar_path = $${paramCount}`);
       updateValues.push(avatarPath);
       paramCount++;
@@ -128,6 +147,7 @@ router.put('/me', requireAuth, upload.single('avatar'), async (req, res) => {
     }
 
     updateValues.push(userId);
+    // Use parameterized query with safe field names (whitelisted)
     const query = `
       UPDATE users 
       SET ${updateFields.join(', ')} 

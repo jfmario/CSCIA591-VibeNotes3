@@ -29,7 +29,30 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+    files: 10
+  },
+  fileFilter: function (req, file, cb) {
+    // Allow specific file types only
+    const allowedMimeTypes = [
+      'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+      'application/pdf',
+      'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    
+    const allowedExtensions = /\.(jpg|jpeg|png|gif|webp|pdf|txt|doc|docx|xls|xlsx)$/i;
+    const extname = allowedExtensions.test(path.extname(file.originalname));
+    const mimetype = allowedMimeTypes.includes(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('File type not allowed. Only images, PDFs, text files, and office documents are permitted.'));
+    }
   }
 });
 
@@ -41,8 +64,43 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Helper function to clean up uploaded files
+function cleanupFiles(files) {
+  if (!files || !Array.isArray(files)) return;
+  files.forEach(file => {
+    if (file && file.path && fs.existsSync(file.path)) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (err) {
+        console.error('Error cleaning up file:', err);
+      }
+    }
+  });
+}
+
+// Wrapper to handle multer errors
+function handleMulterUpload(uploadMiddleware) {
+  return (req, res, next) => {
+    uploadMiddleware(req, res, (err) => {
+      if (err) {
+        if (err instanceof multer.MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File size too large. Maximum size is 50MB.' });
+          }
+          if (err.code === 'LIMIT_FILE_COUNT') {
+            return res.status(400).json({ error: 'Too many files. Maximum is 10 files.' });
+          }
+          return res.status(400).json({ error: 'File upload error: ' + err.message });
+        }
+        return res.status(400).json({ error: err.message || 'File upload error' });
+      }
+      next();
+    });
+  };
+}
+
 // Create a new note
-router.post('/', requireAuth, upload.array('attachments', 10), async (req, res) => {
+router.post('/', requireAuth, handleMulterUpload(upload.array('attachments', 10)), async (req, res) => {
   try {
     const { title, content, is_public } = req.body;
     const userId = req.session.userId;
@@ -51,37 +109,37 @@ router.post('/', requireAuth, upload.array('attachments', 10), async (req, res) 
 
     // Validate input
     if (!title || !content) {
-      // Clean up uploaded files if validation fails
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Title and content are required' });
     }
 
-    if (title.trim().length === 0) {
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+    // Sanitize and validate title
+    const sanitizedTitle = title.trim();
+    if (sanitizedTitle.length === 0) {
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Title cannot be empty' });
     }
+    if (sanitizedTitle.length > 255) {
+      cleanupFiles(files);
+      return res.status(400).json({ error: 'Title must be 255 characters or less' });
+    }
 
-    if (content.trim().length === 0) {
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+    // Sanitize and validate content
+    const sanitizedContent = content.trim();
+    if (sanitizedContent.length === 0) {
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Content cannot be empty' });
+    }
+    // Limit content size (e.g., 1MB of text)
+    if (sanitizedContent.length > 1000000) {
+      cleanupFiles(files);
+      return res.status(400).json({ error: 'Content is too long (maximum 1MB)' });
     }
 
     // Insert new note
     const result = await pool.query(
       'INSERT INTO notes (user_id, title, content, is_public) VALUES ($1, $2, $3, $4) RETURNING id, title, content, is_public, created_at, updated_at',
-      [userId, title.trim(), content.trim(), isPublic]
+      [userId, sanitizedTitle, sanitizedContent, isPublic]
     );
 
     const noteId = result.rows[0].id;
@@ -105,14 +163,14 @@ router.post('/', requireAuth, upload.array('attachments', 10), async (req, res) 
   } catch (error) {
     console.error('Error creating note:', error);
     // Clean up uploaded files on error
-    if (req.files) {
-      req.files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+    cleanupFiles(req.files);
+    
+    // Don't expose internal error details to clients
+    if (error.code === '23505') { // Unique constraint violation
+      res.status(400).json({ error: 'A note with this title already exists' });
+    } else {
+      res.status(500).json({ error: 'Internal server error' });
     }
-    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -207,7 +265,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // Update a specific note by ID
-router.put('/:id', requireAuth, upload.array('attachments', 10), async (req, res) => {
+router.put('/:id', requireAuth, handleMulterUpload(upload.array('attachments', 10)), async (req, res) => {
   try {
     const noteId = parseInt(req.params.id);
     const userId = req.session.userId;
@@ -215,41 +273,36 @@ router.put('/:id', requireAuth, upload.array('attachments', 10), async (req, res
     const files = req.files || [];
 
     if (isNaN(noteId)) {
-      // Clean up uploaded files if validation fails
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Invalid note ID' });
     }
 
     // Validate input
     if (!title || !content) {
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Title and content are required' });
     }
 
-    if (title.trim().length === 0) {
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+    // Sanitize and validate title
+    const sanitizedTitle = title.trim();
+    if (sanitizedTitle.length === 0) {
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Title cannot be empty' });
     }
+    if (sanitizedTitle.length > 255) {
+      cleanupFiles(files);
+      return res.status(400).json({ error: 'Title must be 255 characters or less' });
+    }
 
-    if (content.trim().length === 0) {
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+    // Sanitize and validate content
+    const sanitizedContent = content.trim();
+    if (sanitizedContent.length === 0) {
+      cleanupFiles(files);
       return res.status(400).json({ error: 'Content cannot be empty' });
+    }
+    if (sanitizedContent.length > 1000000) {
+      cleanupFiles(files);
+      return res.status(400).json({ error: 'Content is too long (maximum 1MB)' });
     }
 
     // Check if note exists and belongs to user
@@ -259,11 +312,7 @@ router.put('/:id', requireAuth, upload.array('attachments', 10), async (req, res
     );
 
     if (checkResult.rows.length === 0) {
-      files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
+      cleanupFiles(files);
       return res.status(404).json({ error: 'Note not found' });
     }
 
@@ -274,7 +323,7 @@ router.put('/:id', requireAuth, upload.array('attachments', 10), async (req, res
     // Update note
     const result = await pool.query(
       'UPDATE notes SET title = $1, content = $2, is_public = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 AND user_id = $5 RETURNING id, title, content, is_public, created_at, updated_at',
-      [title.trim(), content.trim(), isPublic, noteId, userId]
+      [sanitizedTitle, sanitizedContent, isPublic, noteId, userId]
     );
 
     // Save new file attachments
@@ -296,13 +345,7 @@ router.put('/:id', requireAuth, upload.array('attachments', 10), async (req, res
   } catch (error) {
     console.error('Error updating note:', error);
     // Clean up uploaded files on error
-    if (req.files) {
-      req.files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
-    }
+    cleanupFiles(req.files);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -333,10 +376,18 @@ router.delete('/:id', requireAuth, async (req, res) => {
       [noteId]
     );
 
-    // Delete physical files
+    // Delete physical files (with path traversal protection)
     attachmentsResult.rows.forEach(attachment => {
-      const filePath = path.join(__dirname, '..', 'public', attachment.file_path);
-      if (fs.existsSync(filePath)) {
+      // Sanitize file path to prevent path traversal
+      const sanitizedPath = path.normalize(attachment.file_path).replace(/^(\.\.(\/|\\|$))+/, '');
+      const filePath = path.join(__dirname, '..', 'public', sanitizedPath);
+      
+      // Ensure the file path is within the public directory
+      const publicDir = path.join(__dirname, '..', 'public');
+      const resolvedPath = path.resolve(filePath);
+      const resolvedPublicDir = path.resolve(publicDir);
+      
+      if (resolvedPath.startsWith(resolvedPublicDir) && fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
     });
@@ -387,9 +438,16 @@ router.delete('/:id/attachments/:attachmentId', requireAuth, async (req, res) =>
       return res.status(404).json({ error: 'Attachment not found' });
     }
 
-    // Delete physical file
-    const filePath = path.join(__dirname, '..', 'public', attachmentResult.rows[0].file_path);
-    if (fs.existsSync(filePath)) {
+    // Delete physical file (with path traversal protection)
+    const sanitizedPath = path.normalize(attachmentResult.rows[0].file_path).replace(/^(\.\.(\/|\\|$))+/, '');
+    const filePath = path.join(__dirname, '..', 'public', sanitizedPath);
+    
+    // Ensure the file path is within the public directory
+    const publicDir = path.join(__dirname, '..', 'public');
+    const resolvedPath = path.resolve(filePath);
+    const resolvedPublicDir = path.resolve(publicDir);
+    
+    if (resolvedPath.startsWith(resolvedPublicDir) && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
 

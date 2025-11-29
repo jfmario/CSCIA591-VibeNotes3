@@ -14,18 +14,30 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    if (username.length < 3) {
+    // Sanitize username (remove whitespace, limit length)
+    const sanitizedUsername = username.trim();
+    if (sanitizedUsername.length < 3) {
       return res.status(400).json({ error: 'Username must be at least 3 characters long' });
+    }
+    if (sanitizedUsername.length > 255) {
+      return res.status(400).json({ error: 'Username must be 255 characters or less' });
+    }
+    // Validate username format (alphanumeric and underscore only)
+    if (!/^[a-zA-Z0-9_]+$/.test(sanitizedUsername)) {
+      return res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores' });
     }
 
     if (password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters long' });
     }
+    if (password.length > 128) {
+      return res.status(400).json({ error: 'Password must be 128 characters or less' });
+    }
 
     // Check if username already exists
     const userCheck = await pool.query(
       'SELECT id FROM users WHERE username = $1',
-      [username]
+      [sanitizedUsername]
     );
 
     if (userCheck.rows.length > 0) {
@@ -39,7 +51,7 @@ router.post('/register', async (req, res) => {
     // Insert new user
     const result = await pool.query(
       'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username',
-      [username, passwordHash]
+      [sanitizedUsername, passwordHash]
     );
 
     // Set session
@@ -69,10 +81,13 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
+    // Sanitize username
+    const sanitizedUsername = username.trim();
+
     // Find user
     const result = await pool.query(
       'SELECT id, username, password_hash FROM users WHERE username = $1',
-      [username]
+      [sanitizedUsername]
     );
 
     if (result.rows.length === 0) {
